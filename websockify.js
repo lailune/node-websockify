@@ -27,6 +27,9 @@ const WebSocketServer = require('ws').Server;
 
 /**
  * Create websockify instance
+ * WARNING:
+ * source - WebSocket server binding address
+ * target - proxying TCP port
  * @param {object} options
  */
 
@@ -52,6 +55,9 @@ class Websockify {
 
 // parse source and target arguments into parts
         //try {
+        if(!this.options.source || !this.options.target) {
+            throw new Error('No source or target specified');
+        }
         let sourceArg = this.options.source;
         let targetArg = this.options.target;
 
@@ -85,43 +91,63 @@ class Websockify {
 
     /**
      * Starts web socket server
+     * @async
      */
     start() {
         const that = this;
-        this.log("WebSocket settings: ");
-        this.log("    - proxying from " + this._sourceHost + ":" + this._sourcePort +
-            " to " + this._targetHost + ":" + this._targetPort);
-        if(this.options.web) {
-            this.log("    - Web server active. Serving: " + this.options.web);
-        }
-
-        //If we use predefined server
-        if(this.options.webServer) {
-            this.wsServer = new WebSocketServer({server: this.options.webServer});
-            this.wsServer.on('connection', this.onClientConnected);
-        } else {
-            //Or create web server manually
-            if(this.options.cert) {
-                this.options.key = this.options.key || this.options.cert;
-                let cert = fs.readFileSync(this.options.cert),
-                    key = fs.readFileSync(this.options.key);
-                this.log("    - Running in encrypted HTTPS (wss://) mode using: " + this.options.cert + ", " + this.options.key);
-                this.webServer = https.createServer({cert: cert, key: key}, this.onHttpRequest);
-            } else {
-                this.log("    - Running in unencrypted HTTP (ws://) mode");
-                this.webServer = http.createServer(this.onHttpRequest);
+        return new Promise((resolve, reject) => {
+            that.log("WebSocket settings: ");
+            that.log("    - proxying from " + that._sourceHost + ":" + that._sourcePort +
+                " to " + that._targetHost + ":" + that._targetPort);
+            if(that.options.web) {
+                that.log("    - Web server active. Serving: " + that.options.web);
             }
-            this.webServer.listen(sourcePort, function () {
+
+            //If we use predefined server
+            if(that.options.webServer) {
+                that.wsServer = new WebSocketServer({server: that.options.webServer});
+                that.wsServer.on('connection', (client, req) => {
+                    that.onClientConnected(client, req);
+                });
+
+                return resolve();
+            }
+            //Or create web server manually
+
+            if(that.options.cert) {
+                that.options.key = that.options.key || that.options.cert;
+                let cert = fs.readFileSync(that.options.cert),
+                    key = fs.readFileSync(that.options.key);
+                that.log("    - Running in encrypted HTTPS (wss://) mode using: " + that.options.cert + ", " + that.options.key);
+                that.webServer = https.createServer({cert: cert, key: key}, (request, response) => {
+                    that.onHttpRequest(request, response);
+                });
+            } else {
+                that.log("    - Running in unencrypted HTTP (ws://) mode");
+                that.webServer = http.createServer((request, response) => {
+                    that.onHttpRequest(request, response);
+                });
+            }
+
+            that.webServer.listen(that._sourcePort, function (err) {
+                if(err) {
+                    return reject(err);
+                }
+
                 that.wsServer = new WebSocketServer({server: that.webServer});
-                that.wsServer.on('connection', that.onClientConnected);
+                that.wsServer.on('connection', (client, req) => {
+                    that.onClientConnected(client, req);
+                });
+                return resolve();
             });
-        }
+
+        });
     }
 
     /**
      * Terminates websockify
      */
-    terminate() {
+    async terminate() {
         this.log('Websockify terminate');
         if(!this.options.webServer) {
             this.webServer.close();
@@ -134,7 +160,7 @@ class Websockify {
      */
     log() {
         if(this.logEnabled) {
-            console.log(arguments);
+            console.log(...arguments);
         }
     }
 
@@ -149,9 +175,11 @@ class Websockify {
         let start_time = new Date().getTime();
 
         this.log(req ? req.url : client.upgradeReq.url);
+
         logWithClient = function (msg) {
-            this.log(' ' + clientAddr + ': ' + msg);
+            that.log(' ' + clientAddr + ': ' + msg);
         };
+
         logWithClient('WebSocket connection');
         logWithClient('Version ' + client.protocolVersion + ', subprotocol: ' + client.protocol);
 
