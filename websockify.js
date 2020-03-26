@@ -116,7 +116,7 @@ class Websockify {
 
                 that.options.webServer.on('upgrade', function upgrade(request, socket, head) {
                     const pathname = url.parse(request.url).pathname;
-                    if(pathname === that.options.path) {
+                    if(pathname === that.options.path || !that.options.path) {
                         that.wsServer.handleUpgrade(request, socket, head, function done(ws) {
                             that.wsServer.emit('connection', ws, request);
                         });
