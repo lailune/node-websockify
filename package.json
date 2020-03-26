@@ -4,6 +4,7 @@
   "description": "node-websockify is NodeJS module version of websockify-js project",
   "license": "LGPL-3.0",
   "version": "0.8.0",
+  "main": "websockify.js",
   "repository": {
     "type": "git",
     "url": "git://github.com/lailune/node-websockify.git"

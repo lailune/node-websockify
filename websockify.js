@@ -22,67 +22,157 @@ const
     fs = require('fs'),
     mime = require('mime-types');
 
+const Buffer = require('buffer').Buffer;
+const WebSocketServer = require('ws').Server;
+
 /**
  * Create websockify instance
  * @param {object} options
  */
-module.exports = (options = {}) => {
-    let Buffer = require('buffer').Buffer,
-        WebSocketServer = require('ws').Server,
 
-        webServer, wsServer,
-        sourceHost, sourcePort, targetHost, targetPort,
-        web_path = null,
-        logEnabled = true, targetSocket;
+class Websockify {
+    constructor(options = {}) {
+        this.options = options;
 
-    if(typeof options.logEnabled !== 'undefined') {
-        logEnabled = options.logEnabled
+        this.webServer = null;
+        this.wsServer = null;
+        this.targetSocket = null;
+
+        this._sourceHost = null;
+        this._sourcePort = null;
+        this._targetHost = null;
+        this._targetPort = null;
+
+        this.logEnabled = true;
+
+        if(typeof options.logEnabled !== 'undefined') {
+            this.logEnabled = options.logEnabled
+        }
+
+
+// parse source and target arguments into parts
+        //try {
+        let sourceArg = this.options.source;
+        let targetArg = this.options.target;
+
+        let idx;
+        idx = sourceArg.indexOf(":");
+        if(idx >= 0) {
+            this._sourceHost = sourceArg.slice(0, idx);
+            this._sourcePort = parseInt(sourceArg.slice(idx + 1), 10);
+        } else {
+            this._sourceHost = "";
+            this._sourcePort = parseInt(sourceArg, 10);
+        }
+
+        idx = targetArg.indexOf(":");
+        if(idx < 0) {
+            throw("target must be host:port");
+        }
+        this._targetHost = targetArg.slice(0, idx);
+        this._targetPort = parseInt(targetArg.slice(idx + 1), 10);
+
+        if(isNaN(this._sourcePort) || isNaN(this._targetPort)) {
+            throw("illegal port");
+        }
+        /* } catch (e) {
+            *console.error("websockify.js [--web web_dir] [--cert cert.pem [--key key.pem]] [--record dir] [source_addr:]source_port target_addr:target_port");
+             process.exit(2);
+
+        }*/
+
     }
 
+    /**
+     * Starts web socket server
+     */
+    start() {
+        const that = this;
+        this.log("WebSocket settings: ");
+        this.log("    - proxying from " + this._sourceHost + ":" + this._sourcePort +
+            " to " + this._targetHost + ":" + this._targetPort);
+        if(this.options.web) {
+            this.log("    - Web server active. Serving: " + this.options.web);
+        }
+
+        //If we use predefined server
+        if(this.options.webServer) {
+            this.wsServer = new WebSocketServer({server: this.options.webServer});
+            this.wsServer.on('connection', this.onClientConnected);
+        } else {
+            //Or create web server manually
+            if(this.options.cert) {
+                this.options.key = this.options.key || this.options.cert;
+                let cert = fs.readFileSync(this.options.cert),
+                    key = fs.readFileSync(this.options.key);
+                this.log("    - Running in encrypted HTTPS (wss://) mode using: " + this.options.cert + ", " + this.options.key);
+                this.webServer = https.createServer({cert: cert, key: key}, this.onHttpRequest);
+            } else {
+                this.log("    - Running in unencrypted HTTP (ws://) mode");
+                this.webServer = http.createServer(this.onHttpRequest);
+            }
+            this.webServer.listen(sourcePort, function () {
+                that.wsServer = new WebSocketServer({server: that.webServer});
+                that.wsServer.on('connection', that.onClientConnected);
+            });
+        }
+    }
+
+    /**
+     * Terminates websockify
+     */
+    terminate() {
+        this.log('Websockify terminate');
+        if(!this.options.webServer) {
+            this.webServer.close();
+        }
+        this.wsServer.close();
+    };
 
     /**
      * Log redefine
      */
-    const log = () => {
-        if(logEnabled) {
-            console.log(arguments)
+    log() {
+        if(this.logEnabled) {
+            console.log(arguments);
         }
-    };
+    }
 
     /**
      * Handle new webSocket client
      * @param client
      * @param req
      */
-    const onClientConnected = (client, req) => {
+    onClientConnected(client, req) {
+        const that = this;
         let clientAddr = client._socket.remoteAddress, logWithClient;
         let start_time = new Date().getTime();
 
-        log(req ? req.url : client.upgradeReq.url);
+        this.log(req ? req.url : client.upgradeReq.url);
         logWithClient = function (msg) {
-            log(' ' + clientAddr + ': ' + msg);
+            this.log(' ' + clientAddr + ': ' + msg);
         };
         logWithClient('WebSocket connection');
         logWithClient('Version ' + client.protocolVersion + ', subprotocol: ' + client.protocol);
 
         let rs;
-        if(options.record) {
-            rs = fs.createWriteStream(options.record + '/' + new Date().toISOString().replace(/:/g, "_"));
+        if(this.options.record) {
+            rs = fs.createWriteStream(this.options.record + '/' + new Date().toISOString().replace(/:/g, "_"));
             rs.write('var VNC_frame_data = [\n');
         } else {
             rs = null;
         }
 
-        targetSocket = net.createConnection(targetPort, targetHost, function () {
+        this.targetSocket = net.createConnection(this._targetPort, this._targetHost, function () {
             logWithClient('connected to target');
         });
 
-        targetSocket.on('data', function (data) {
+        this.targetSocket.on('data', function (data) {
             //log("sending message: " + data);
 
             if(rs) {
                 let tdelta = Math.floor(new Date().getTime()) - start_time;
-                let rsdata = '\'{' + tdelta + '{' + decodeBuffer(data) + '\',\n';
+                let rsdata = '\'{' + tdelta + '{' + that.decodeBuffer(data) + '\',\n';
                 rs.write(rsdata);
             }
 
@@ -90,11 +180,11 @@ module.exports = (options = {}) => {
                 client.send(data);
             } catch (e) {
                 logWithClient("Client closed, cleaning up target");
-                targetSocket.end();
+                that.targetSocket.end();
             }
         });
 
-        targetSocket.on('end', function () {
+        this.targetSocket.on('end', function () {
             logWithClient('target disconnected');
             client.close();
             if(rs) {
@@ -102,9 +192,9 @@ module.exports = (options = {}) => {
             }
         });
 
-        targetSocket.on('error', function () {
+        this.targetSocket.on('error', function () {
             logWithClient('target connection error');
-            targetSocket.end();
+            that.targetSocket.end();
             client.close();
             if(rs) {
                 rs.end('\'EOF\'];\n');
@@ -116,30 +206,31 @@ module.exports = (options = {}) => {
 
             if(rs) {
                 let rdelta = Math.floor(new Date().getTime()) - start_time;
-                let rsdata = ('\'}' + rdelta + '}' + decodeBuffer(msg) + '\',\n');
+                let rsdata = ('\'}' + rdelta + '}' + that.decodeBuffer(msg) + '\',\n');
                 ~rs.write(rsdata);
             }
 
-            targetSocket.write(msg);
+            that.targetSocket.write(msg);
         });
 
         client.on('close', function (code, reason) {
             logWithClient('WebSocket client disconnected: ' + code + ' [' + reason + ']');
-            targetSocket.end();
+            that.targetSocket.end();
         });
 
         client.on('error', function (a) {
             logWithClient('WebSocket client error: ' + a);
-            targetSocket.end();
+            that.targetSocket.end();
         });
-    };
+    }
 
     /**
      * Decode buffer method
      * @param buf
      * @return {string}
      */
-    const decodeBuffer = (buf) => {
+
+    decodeBuffer(buf) {
         let returnString = '';
         for (let i = 0; i < buf.length; i++) {
             if(buf[i] >= 48 && buf[i] <= 90) {
@@ -160,7 +251,7 @@ module.exports = (options = {}) => {
             }
         }
         return returnString;
-    };
+    }
 
     /**
      * Send an HTTP error response
@@ -168,31 +259,33 @@ module.exports = (options = {}) => {
      * @param code
      * @param msg
      */
-    const sendHttpError = (response, code, msg) => {
+    sendHttpError(response, code, msg) {
         response.writeHead(code, {"Content-Type": "text/plain"});
         response.write(msg + "\n");
         response.end();
     };
+
 
     /**
      * Process an HTTP static file request
      * @param request
      * @param response
      */
-    const onHttpRequest = (request, response) => {
+    onHttpRequest(request, response) {
+        const that = this;
         //    log("pathname: " + url.parse(req.url).pathname);
         //    res.writeHead(200, {'Content-Type': 'text/plain'});
         //    res.end('okay');
 
-        if(!options.web) {
-            return sendHttpError(response, 403, "403 Permission Denied");
+        if(!this.options.web) {
+            return this.sendHttpError(response, 403, "403 Permission Denied");
         }
 
-        let uri = url.parse(request.url).pathname, filename = path.join(options.web, uri);
+        let uri = url.parse(request.url).pathname, filename = path.join(this.options.web, uri);
 
         fs.exists(filename, function (exists) {
             if(!exists) {
-                return sendHttpError(response, 404, "404 Not Found");
+                return that.sendHttpError(response, 404, "404 Not Found");
             }
 
             if(fs.statSync(filename).isDirectory()) {
@@ -201,7 +294,7 @@ module.exports = (options = {}) => {
 
             fs.readFile(filename, "binary", function (err, file) {
                 if(err) {
-                    return sendHttpError(response, 500, err);
+                    return that.sendHttpError(response, 500, err);
                 }
 
                 let headers = {};
@@ -217,83 +310,6 @@ module.exports = (options = {}) => {
         });
     };
 
-// parse source and target arguments into parts
-    //try {
-    let source_arg = options.source;
-    let target_arg = options.target;
+}
 
-    let idx;
-    idx = source_arg.indexOf(":");
-    if(idx >= 0) {
-        sourceHost = source_arg.slice(0, idx);
-        sourcePort = parseInt(source_arg.slice(idx + 1), 10);
-    } else {
-        sourceHost = "";
-        sourcePort = parseInt(source_arg, 10);
-    }
-
-    idx = target_arg.indexOf(":");
-    if(idx < 0) {
-        throw("target must be host:port");
-    }
-    targetHost = target_arg.slice(0, idx);
-    targetPort = parseInt(target_arg.slice(idx + 1), 10);
-
-    if(isNaN(sourcePort) || isNaN(targetPort)) {
-        throw("illegal port");
-    }
-    /* } catch (e) {
-        *console.error("websockify.js [--web web_dir] [--cert cert.pem [--key key.pem]] [--record dir] [source_addr:]source_port target_addr:target_port");
-         process.exit(2);
-
-    }*/
-
-    log("WebSocket settings: ");
-    log("    - proxying from " + sourceHost + ":" + sourcePort +
-        " to " + targetHost + ":" + targetPort);
-    if(options.web) {
-        log("    - Web server active. Serving: " + options.web);
-    }
-
-    //If we use predefined server
-    if(options.webServer) {
-        wsServer = new WebSocketServer({server: options.webServer});
-        wsServer.on('connection', onClientConnected);
-    } else {
-        //Or create web server manually
-        if(options.cert) {
-            options.key = options.key || options.cert;
-            let cert = fs.readFileSync(options.cert),
-                key = fs.readFileSync(options.key);
-            log("    - Running in encrypted HTTPS (wss://) mode using: " + options.cert + ", " + options.key);
-            webServer = https.createServer({cert: cert, key: key}, onHttpRequest);
-        } else {
-            log("    - Running in unencrypted HTTP (ws://) mode");
-            webServer = http.createServer(onHttpRequest);
-        }
-        webServer.listen(sourcePort, function () {
-            wsServer = new WebSocketServer({server: webServer});
-            wsServer.on('connection', onClientConnected);
-        });
-    }
-
-    /**
-     * Terminates websockify
-     */
-    const terminate = () => {
-        log('Websockify terminate');
-        if(!options.webServer) {
-            webServer.close;
-        }
-        wsServer.close();
-    };
-
-    return {
-        wsServer: wsServer,
-        webServer: webServer,
-        log: log,
-        options: options,
-        targetSocket,
-        terminate
-    }
-};
+module.exports = Websockify;
