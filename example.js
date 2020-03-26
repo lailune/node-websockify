@@ -18,6 +18,7 @@ const Websockify = require('.');
         }
     );
 
+
     //Start websockify instance
     await wsockify.start();
 

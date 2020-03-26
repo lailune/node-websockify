@@ -55,20 +55,22 @@ class Websockify {
 
 // parse source and target arguments into parts
         //try {
-        if(!this.options.source || !this.options.target) {
+        if((!this.options.source || !this.options.target) && !this.options.webServer) {
             throw new Error('No source or target specified');
         }
         let sourceArg = this.options.source;
         let targetArg = this.options.target;
 
         let idx;
-        idx = sourceArg.indexOf(":");
-        if(idx >= 0) {
-            this._sourceHost = sourceArg.slice(0, idx);
-            this._sourcePort = parseInt(sourceArg.slice(idx + 1), 10);
-        } else {
-            this._sourceHost = "";
-            this._sourcePort = parseInt(sourceArg, 10);
+        if(!this.options.webServer) {
+            idx = sourceArg.indexOf(":");
+            if(idx >= 0) {
+                this._sourceHost = sourceArg.slice(0, idx);
+                this._sourcePort = parseInt(sourceArg.slice(idx + 1), 10);
+            } else {
+                this._sourceHost = "";
+                this._sourcePort = parseInt(sourceArg, 10);
+            }
         }
 
         idx = targetArg.indexOf(":");
@@ -97,15 +99,30 @@ class Websockify {
         const that = this;
         return new Promise((resolve, reject) => {
             that.log("WebSocket settings: ");
-            that.log("    - proxying from " + that._sourceHost + ":" + that._sourcePort +
-                " to " + that._targetHost + ":" + that._targetPort);
-            if(that.options.web) {
-                that.log("    - Web server active. Serving: " + that.options.web);
+            if(!that.options.webServer) {
+                that.log("    - proxying from " + that._sourceHost + ":" + that._sourcePort +
+                    " to " + that._targetHost + ":" + that._targetPort);
+                if(that.options.web) {
+                    that.log("    - Web server active. Serving: " + that.options.web);
+                }
+            } else {
+                that.log("    - proxying from custom web server" +
+                    " to " + that._targetHost + ":" + that._targetPort);
             }
 
             //If we use predefined server
             if(that.options.webServer) {
-                that.wsServer = new WebSocketServer({server: that.options.webServer, path: that.options.path});
+                that.wsServer = new WebSocketServer({noServer: true, path: that.options.path});
+
+                that.options.webServer.on('upgrade', function upgrade(request, socket, head) {
+                    const pathname = url.parse(request.url).pathname;
+                    if(pathname === that.options.path) {
+                        that.wsServer.handleUpgrade(request, socket, head, function done(ws) {
+                            that.wsServer.emit('connection', ws, request);
+                        });
+                    }
+                });
+
                 that.wsServer.on('connection', (client, req) => {
                     that.onClientConnected(client, req);
                 });
