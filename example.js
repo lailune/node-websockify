@@ -13,6 +13,7 @@ const Websockify = require('.');
         {
             source: 'localhost:5901', //WebSocket server binding address
             target: 'localhost:5900', //Proxying TCP port
+            path: '/test',            //Websocket subpath (DONT FORGET SLASH)
             //logEnabled: false,      //Disable logging
         }
     );

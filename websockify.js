@@ -105,7 +105,7 @@ class Websockify {
 
             //If we use predefined server
             if(that.options.webServer) {
-                that.wsServer = new WebSocketServer({server: that.options.webServer});
+                that.wsServer = new WebSocketServer({server: that.options.webServer, path: that.options.path});
                 that.wsServer.on('connection', (client, req) => {
                     that.onClientConnected(client, req);
                 });
@@ -134,7 +134,7 @@ class Websockify {
                     return reject(err);
                 }
 
-                that.wsServer = new WebSocketServer({server: that.webServer});
+                that.wsServer = new WebSocketServer({server: that.webServer, path: that.options.path});
                 that.wsServer.on('connection', (client, req) => {
                     that.onClientConnected(client, req);
                 });
